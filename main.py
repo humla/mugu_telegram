@@ -16,6 +16,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handleMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message.text
+    message.split('')
     await context.bot.send_message(chat_id=update.effective_chat.id,text='You just sent me a message, I am handling it')
 
 if __name__ == '__main__':
