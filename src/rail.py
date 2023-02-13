@@ -10,15 +10,19 @@ class RailRequest(Request):
 
     def handleRequest(self):
         if (self.command() in RailRequest.supportedCommands): 
-            logging.info ("I support this request type")
-            return RailRequest.getDepartureForStation("DFD")
+            logging.info ("I support this request type: " + self.command())
+            if (len(self.requestParams) > 2):
+                 to = self.requestParams[2] 
+            else:
+                to =  ""
+            return RailRequest.getDepartureForStation(self.requestParams[1], to)
     
     def apiKey():
         # Load the rail.key file and get the api key
         token = getTokenFromFile('rail.key')
         return token
 
-    def getDepartureForStation(stationId):
+    def getDepartureForStation(stationId, to):
         api_address = "https://lite.realtime.nationalrail.co.uk/OpenLDBWS/wsdl.aspx?ver=2021-11-01"
         api_token = RailRequest.apiKey()
 
@@ -33,7 +37,7 @@ class RailRequest(Request):
 
         # Call a method on the service
         result = client.service.GetDepBoardWithDetails(
-            numRows="20", crs=stationId, filterCrs="", filterType="to", timeOffset="0", timeWindow="120")
+            numRows="10", crs=stationId, filterCrs=to, filterType="to", timeOffset="0", timeWindow="120")
 
         # The result variable now holds the result of the SOAP request
         return RailResponse(result)
@@ -43,24 +47,22 @@ class RailResponse(Response):
         self.details = stationBoardWithDetails
     
     def toTelegramString(self):
-        #logging.info(self.details.trainServices[0])
         res = list(map(lambda a: ServiceItem(a).toString() ,self.details.trainServices.service))
-        logging.info(res)
-        return ""
+        return res
 
 class ServiceItem:
     def __init__(self, serviceItem):
-        
+        logging.debug(serviceItem)
         self.std = serviceItem.std
         self.etd = serviceItem.etd
         if (self.etd.lower() == "on time"):
             self.timing = self.std
         else:
             self.timing = self.etd + " (" + self.std + ")" 
-        self.platform = "test" #serviceItem.platform
+        self.platform = getattr(serviceItem, 'platform', 'NA')
         self.destination = serviceItem.destination.location[0].locationName
         self.origin = serviceItem.origin.location[0].locationName
 
     def toString(self):
-        return self.timing + " " + self.platform + " " + self.destination + " " + self.origin 
+        return self.timing + " " + self.destination + " P:" + self.platform 
         
