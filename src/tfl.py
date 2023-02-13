@@ -5,8 +5,8 @@ class TflRequest(Request):
     supportedCommands = {'tube', 'bus'}
 
     def apiKey():
-        # Load the tfl.key file 
-        pass
+        token = getTokenFromFile('tfl.key')
+        return token
 
     def handleRequest(self):
         if (self.command in TflRequest.supportedCommands):
@@ -18,7 +18,6 @@ class TflRequest(Request):
     def makeRequestToTflServer(self):
         apiServer = 'https://api.tfl.gov.uk/StopPoint/%Name%'
         apiServer2= 'https://api.tfl.gov.uk/StopPoint/%Name%/Arrivals?'
-        appIdAndKey = "app_id=0db3f13d&app_key=91a44d1f46487768a0718e716e33a5ce"
         "Result"
 
 class TflResponse(Response):
