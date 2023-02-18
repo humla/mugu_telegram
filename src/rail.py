@@ -1,12 +1,30 @@
 from req import Request, Response
 from util import logging, getTokenFromFile
+import csv
 
 from suds.client import Client
 from suds.sax.element import Element
 
+class StationCodeRequest(Request):
+    supportedCommands = {'code'}
+
+    def handleRequest(self):
+        if (self.command() in StationCodeRequest.supportedCommands):
+            return ""
+        else:
+            return "1"
+        pass
+
+    def lookupStation(stationName):
+        
+        pass
+
 class RailRequest(Request):
     supportedCommands = {'train'}
 
+    def helpString(self):
+        return "train <station code>: Get realtime departure for a train station\n" + "train <station code A> <station code B>: Get realtime departures for a train from station A to station B"
+            
 
     def handleRequest(self):
         if (self.command() in RailRequest.supportedCommands): 
@@ -48,6 +66,9 @@ class RailResponse(Response):
     
     def toTelegramString(self):
         res = list(map(lambda a: ServiceItem(a).toString() ,self.details.trainServices.service))
+        locationName = self.details.locationName
+        crs = self.details.crs
+        res.insert(0, "National Rail: %s (%s)" % (locationName, crs))
         return res
 
 class ServiceItem:

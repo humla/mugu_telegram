@@ -9,9 +9,16 @@ class Request:
     def command(self):
         return self.requestParams[0].lower()
 
-    def helpString():
+    def helpString(self):
         pass
 
 class Response:
     def toTelegramString(self): 
         pass
+
+class SimpleResponse(Response):
+    def __init__(self, response):
+        self.resposne = response
+
+    def toTelegramString(self):
+        return response

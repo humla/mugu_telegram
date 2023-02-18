@@ -34,6 +34,6 @@ if __name__ == '__main__':
 
 logging.info("Ending the server now")
 
-messages = ["train", "dfd"]
+#messages = ["train", "dfd"]
 #response = buildResponse(messages)
 #logging.info(response)

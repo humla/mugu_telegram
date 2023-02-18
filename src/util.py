@@ -7,7 +7,7 @@ logging.basicConfig(
 )
 
 def getTokenFromFile(file):
-    file_with_path = os.path.join(os.path.dirname(__file__), "../" + file)
+    file_with_path = os.path.join(os.path.dirname(__file__), "../res/" + file)
     with open(file_with_path) as f:
         lines = f.readlines()
     f.close()
