@@ -4,6 +4,9 @@ from util import logging
 class TflRequest(Request):
     supportedCommands = {'tube', 'bus'}
 
+    def helpString(self):
+        return "tube <station name>: Not supported yet\nbus <bus stop name>: Not supported yet"
+
     def apiKey():
         token = getTokenFromFile('tfl.key')
         return token

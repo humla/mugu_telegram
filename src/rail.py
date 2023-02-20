@@ -8,6 +8,9 @@ from suds.sax.element import Element
 class StationCodeRequest(Request):
     supportedCommands = {'code'}
 
+    def helpString(self):
+        return "code <station name>: Get the crif code for a station."
+
     def handleRequest(self):
         if (self.command() in StationCodeRequest.supportedCommands):
             return ""
