@@ -17,7 +17,7 @@ def allRequestHandlers(messages):
 def buildResponse(messages):
     allRequests = allRequestHandlers(messages)
     responses = list(filter(lambda b: b is not None, (map(lambda a: a.handleRequestBase(), allRequests))))
-    logging.info(responses)
+    logging.debug(responses)
     validResponses = [x for x in responses if type(x) != EmptyResponse]
     first_response = validResponses[0].toTelegramString() if validResponses else ""
     return "\n".join(first_response)
@@ -52,7 +52,8 @@ if __name__ == '__main__':
     application.run_polling()
 
 logging.info("Ending the server now")
-#logging.info(buildHelpString())
-#messages = ["train", "dfd", "abw"]
-#response = buildResponse(messages)
-#logging.info(response)
+# To debug just change the __main__ above to a different string and uncomment the following
+logging.info(buildHelpString())
+messages = ["fuel"]
+response = buildResponse(messages)
+logging.info(response)
