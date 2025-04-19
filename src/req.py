@@ -27,10 +27,13 @@ class Response:
 
 class SimpleResponse(Response):
     def __init__(self, response):
-        self.response = response
+        if isinstance(response, str):
+            self.response = [response]
+        else:
+            self.response = response
 
     def toTelegramString(self):
-        return [self.response]
+        return self.response
 
 class EmptyResponse(Response):  
     def toTelegramString(self):
