@@ -3,18 +3,23 @@
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 import req, rail, tfl, hello, util
+from req import EmptyResponse
 from tfl import TflRequest
 from rail import RailRequest, StationCodeRequest
+from fuel import FuelPriceRequest
 from util import logging
+import types
 
 
 def allRequestHandlers(messages):
-    return [TflRequest(messages), RailRequest(messages), StationCodeRequest(messages)]
+    return [TflRequest(messages), RailRequest(messages), StationCodeRequest(messages), FuelPriceRequest(messages)]
 
 def buildResponse(messages):
     allRequests = allRequestHandlers(messages)
-    responses = list(filter(lambda b: b is not None, (map(lambda a: a.handleRequest(), allRequests))))
-    first_response = responses[0].toTelegramString() if responses else ""
+    responses = list(filter(lambda b: b is not None, (map(lambda a: a.handleRequestBase(), allRequests))))
+    logging.info(responses)
+    validResponses = [x for x in responses if type(x) != EmptyResponse]
+    first_response = validResponses[0].toTelegramString() if validResponses else ""
     return "\n".join(first_response)
 
 def buildHelpString():
@@ -48,6 +53,6 @@ if __name__ == '__main__':
 
 logging.info("Ending the server now")
 #logging.info(buildHelpString())
-#messages = ["train", "dfd"]
+#messages = ["train", "dfd", "abw"]
 #response = buildResponse(messages)
 #logging.info(response)
