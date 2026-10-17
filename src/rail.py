@@ -145,7 +145,7 @@ class RailRequest(Request):
 
     def helpString(self):
         return ("train <station name or code>: Get realtime departure for a train station\n"
-                "train <station A>, <station B>: Get realtime departures from station A to station B.")
+                "train <station A> to <station B>: Get realtime departures from station A to station B (or separate with a comma).")
 
     def handleRequest(self):
         logging.info("Rail request: " + " ".join(self.requestParams))
@@ -159,34 +159,69 @@ class RailRequest(Request):
 
     @staticmethod
     def resolveStationWords(words):
-        """Resolve 'train <station> [, <destination>]' where either may be several words.
+        """Resolve 'train <station> [to <destination>]' or 'train <station> [, <destination>]'
+        where either station may be several words.
         Returns: (code, to, disambiguation_response, error_message)
         """
         if not words:
             return None, None, None, ("Which station would you like to check? E.g.:\n"
                                       "• <code>train DFD</code>\n"
+                                      "• <code>train dartford to london bridge</code>\n"
                                       "• <code>train dartford, london bridge</code>")
 
-        # Comma-separated: train station1, station2
+        # Comma-separated: train station1, station2 (or train station1, to station2)
         if any(',' in word for word in words):
             parts = [part.strip() for part in " ".join(words).split(',') if part.strip()]
             if len(parts) != 2:
-                return None, None, None, "Please use one comma to separate the two stations, e.g. <code>train dartford, london bridge</code>"
-            code, matches1, err1 = RailRequest.resolveStation(parts[0])
+                return None, None, None, "Please use one comma to separate the two stations, e.g. <code>train dartford to london bridge</code>"
+            origin_query = parts[0]
+            dest_query = parts[1]
+            if dest_query.lower().startswith("to "):
+                dest_query = dest_query[3:].strip()
+
+            code, matches1, err1 = RailRequest.resolveStation(origin_query)
             if err1:
                 return None, None, None, err1
             if matches1:
-                return None, None, StationDisambiguationResponse(parts[0], matches1), None
+                return None, None, StationDisambiguationResponse(origin_query, matches1), None
 
-            to, matches2, err2 = RailRequest.resolveStation(parts[1])
+            to, matches2, err2 = RailRequest.resolveStation(dest_query)
             if err2:
                 return None, None, None, err2
             if matches2:
-                return None, None, StationDisambiguationResponse(parts[1], matches2, from_crs=code, is_destination=True), None
+                return None, None, StationDisambiguationResponse(dest_query, matches2, from_crs=code, is_destination=True), None
 
             return code, to, None, None
 
-        # Try word splits for two stations without a comma (e.g. train slade green london bridge)
+        # 'to' separated: train station1 to station2
+        words_lower = [w.lower() for w in words]
+        if 'to' in words_lower:
+            to_idx = words_lower.index('to')
+            origin_words = words[:to_idx]
+            dest_words = words[to_idx + 1:]
+            if not origin_words:
+                return None, None, None, "Please specify where you are travelling from, e.g. <code>train dartford to london bridge</code>"
+            if not dest_words:
+                return None, None, None, "Please specify where you are travelling to, e.g. <code>train dartford to london bridge</code>"
+
+            origin_query = " ".join(origin_words)
+            dest_query = " ".join(dest_words)
+
+            code, matches1, err1 = RailRequest.resolveStation(origin_query)
+            if err1:
+                return None, None, None, err1
+            if matches1:
+                return None, None, StationDisambiguationResponse(origin_query, matches1), None
+
+            to, matches2, err2 = RailRequest.resolveStation(dest_query)
+            if err2:
+                return None, None, None, err2
+            if matches2:
+                return None, None, StationDisambiguationResponse(dest_query, matches2, from_crs=code, is_destination=True), None
+
+            return code, to, None, None
+
+        # Try word splits for two stations without a comma or 'to' (e.g. train slade green london bridge)
         for k in range(0, len(words) - 1):
             code, m1, err1 = RailRequest.resolveStation(" ".join(words[:k + 1]))
             if code:
