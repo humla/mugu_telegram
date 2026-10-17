@@ -135,21 +135,31 @@ class RailRequest(Request):
             numRows="10", crs=stationId, filterCrs=to, filterType="to", timeOffset="0", timeWindow="120")
 
         # The result variable now holds the result of the SOAP request
-        return RailResponse(result)
+        return RailResponse(result, to)
 
 class RailResponse(Response):
-    def __init__(self, stationBoardWithDetails):
+    def __init__(self, stationBoardWithDetails, filterTo=""):
         self.details = stationBoardWithDetails
+        self.filterTo = filterTo
     
+    def destinationLabel(self):
+        if not self.filterTo:
+            return ""
+        codes = loadStationCodes()
+        names = [name.title() for name, code in codes.items() if code == self.filterTo]
+        name = names[0] if names else self.filterTo
+        return " to %s (%s)" % (name, self.filterTo)
+
     def toTelegramString(self):
         services = getattr(self.details, 'trainServices', None)
         services = services.service if services else []
-        if not services:
-            return ["National Rail: %s (%s) - no departing services found" % (self.details.locationName, self.details.crs)]
-        res = list(map(lambda a: ServiceItem(a).toString() ,services))
         locationName = self.details.locationName
         crs = self.details.crs
-        res.insert(0, "National Rail: %s (%s)" % (locationName, crs))
+        header = "National Rail: %s (%s)%s" % (locationName, crs, self.destinationLabel())
+        if not services:
+            return [header + " - no departing services found"]
+        res = list(map(lambda a: ServiceItem(a).toString() ,services))
+        res.insert(0, header)
         return res
 
 class ServiceItem:
