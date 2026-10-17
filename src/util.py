@@ -12,5 +12,5 @@ def getTokenFromFile(file):
         lines = f.readlines()
     f.close()
     token = lines[0].strip()
-    logging.info("Token is " + token)
+    logging.info(f"Loaded token from {file}")
     return token
