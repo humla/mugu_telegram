@@ -1,6 +1,8 @@
 *.key
 *.swp
 out
+res/user_settings.json
+user_settings.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
