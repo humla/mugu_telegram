@@ -2,17 +2,18 @@
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-import req, rail, tfl, hello, util
+import req, rail, tfl, hello, util, nature
 from req import EmptyResponse
 from tfl import TflRequest
 from rail import RailRequest, StationCodeRequest
 from fuel import FuelPriceRequest
+from nature import NatureRequest
 from util import logging
 import types
 
 
 def allRequestHandlers(messages):
-    return [TflRequest(messages), RailRequest(messages), StationCodeRequest(messages), FuelPriceRequest(messages)]
+    return [TflRequest(messages), RailRequest(messages), StationCodeRequest(messages), FuelPriceRequest(messages), NatureRequest(messages)]
 
 def buildResponse(messages):
     allRequests = allRequestHandlers(messages)
@@ -50,10 +51,3 @@ if __name__ == '__main__':
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handleMessage))
     
     application.run_polling()
-
-logging.info("Ending the server now")
-# To debug just change the __main__ above to a different string and uncomment the following
-logging.info(buildHelpString())
-messages = ["fuel"]
-response = buildResponse(messages)
-logging.info(response)

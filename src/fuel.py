@@ -22,28 +22,29 @@ class FuelPriceRequest(Request):
 
         # Check if the request was successful
         if response.status_code == 200:
-            # Parse JSON response
-            json_data = response.json()
+            try:
+                # Parse JSON response
+                json_data = response.json()
 
-            gas_info = []
-            for location in json_data.get("data", []):
-                display_name = location.get("displayName", "Unknown")
+                gas_info = []
+                for location in json_data.get("data", []):
+                    display_name = location.get("displayName", "Unknown")
 
-                gas_station = next((service for service in location.get("availableServices", []) if service.get("code") == "GAS_STATION"),None)
+                    gas_station = next((service for service in location.get("availableServices", []) if service.get("code") == "GAS_STATION"), None)
 
-                if gas_station and "gasTypes" in gas_station:
-                    gas_string = ", ".join(f"{g['name']}: {g['price']}" for g in gas_station["gasTypes"])
-                    gas_info.append(f"{display_name}: {gas_string}")
+                    if gas_station and "gasTypes" in gas_station:
+                        gas_string = ", ".join(f"{g['name']}: {g['price']}" for g in gas_station["gasTypes"])
+                        gas_info.append(f"{display_name}: {gas_string}")
 
-            for gas_string in gas_info:
-                logging.info(f"{gas_string}")
-            
-            gas_types = json_data["data"][0]["availableServices"][0]["gasTypes"]
-            gas_string = ", ".join(f"{gas['name']}: {gas['price']}" for gas in gas_types)
+                for gas_string in gas_info:
+                    logging.info(f"{gas_string}")
 
-            return SimpleResponse(gas_info)
+                if not gas_info:
+                    return SimpleResponse("I found no Costco fuel stations near %s." % postcode.upper())
+                return SimpleResponse(gas_info)
+            except (ValueError, KeyError, IndexError, AttributeError):
+                logging.info("Costco response was not the expected JSON")
+                return SimpleResponse("Sorry, the Costco website is not returning fuel prices in the expected format right now.")
         else:
             logging.info(f"Request failed with status code {response.status_code}")
             return SimpleResponse("Sorry, I could not fetch fuel prices right now (HTTP %d)." % response.status_code)
-
-
