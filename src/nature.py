@@ -1,5 +1,7 @@
 from req import Request, Response, SimpleResponse, EmptyResponse
 from util import logging
+import html
+import re
 import xml.etree.ElementTree as ET
 import requests
 
@@ -40,12 +42,16 @@ class NatureRequest(Request):
                 title = NatureRequest.childText(item, 'title')
                 link = NatureRequest.childText(item, 'link')
                 date = NatureRequest.childText(item, 'date') or NatureRequest.childText(item, 'pubDate')
+                summary = NatureRequest.summaryText(item)
                 if not title:
                     continue
                 title = title.strip()
                 if titleSuffix and title.endswith(titleSuffix):
                     title = title[:-len(titleSuffix)].strip()
-                articles.append("%s: %s (%s)\n%s" % (label, title, NatureRequest.formatDate(date), link))
+                line = "%s: %s (%s)" % (label, title, NatureRequest.formatDate(date))
+                if summary and not summary.startswith(title):
+                    line += "\n" + summary
+                articles.append(line + "\n" + link)
             return articles
         except (ET.ParseError, requests.RequestException) as e:
             logging.info(f"{label} feed could not be read: {e}")
@@ -55,6 +61,21 @@ class NatureRequest(Request):
         for child in item:
             if child.tag.split('}')[-1] == localName and child.text:
                 return child.text.strip()
+        return ''
+
+    SUMMARY_LENGTH = 200
+
+    def summaryText(item):
+        """Extract a plain-text summary: Nature's content:encoded or the generic RSS description."""
+        for child in item:
+            if child.tag.split('}')[-1] in ('encoded', 'description') and child.text:
+                text = re.sub(r'<[^>]+>', ' ', child.text)  # strip HTML
+                text = html.unescape(text)
+                text = re.sub(r'\s+', ' ', text).strip()
+                text = re.sub(r'^(Nature, Published online: [0-9]+ [A-Za-z]+ [0-9]+;?\s*)?(doi:\S+\s*)', '', text)
+                if len(text) > NatureRequest.SUMMARY_LENGTH:
+                    text = text[:NatureRequest.SUMMARY_LENGTH].rsplit(' ', 1)[0] + '…'
+                return text
         return ''
 
     def formatDate(rawDate):
