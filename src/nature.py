@@ -4,31 +4,64 @@ import xml.etree.ElementTree as ET
 import requests
 
 class NatureRequest(Request):
-    FEED_URL = 'https://www.nature.com/nature.rss'
     LATEST_COUNT = 5
+    # Each feed: (source label, feed url, title suffix to strip)
+    FEEDS = [
+        ('Nature', 'https://www.nature.com/nature.rss', ''),
+        ('NatGeo', 'https://news.google.com/rss/search?q=site:nationalgeographic.com+when:30d&hl=en-GB&gl=GB&ceid=GB:en', ' - National Geographic'),
+    ]
 
     def supportedCommands(self):
         return {'nature'}
 
     def helpString(self):
-        return "nature : Shows the latest articles from Nature magazine"
+        return "nature : Shows the latest articles from Nature and National Geographic"
 
     def handleRequest(self):
         logging.info("Nature request")
-        response = requests.get(NatureRequest.FEED_URL, headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
-        if response.status_code != 200:
-            return SimpleResponse("Sorry, I could not fetch the Nature feed right now (HTTP %d)." % response.status_code)
-
-        root = ET.fromstring(response.content)
-        ns = {'rss1': 'http://purl.org/rss/1.0/', 'dc': 'http://purl.org/dc/elements/1.1/'}
         articles = []
-        for item in root.findall('rss1:item', ns)[:NatureRequest.LATEST_COUNT]:
-            title = item.findtext('rss1:title', default='', namespaces=ns).strip()
-            link = item.findtext('rss1:link', default='', namespaces=ns).strip()
-            date = item.findtext('dc:date', default='', namespaces=ns).strip()[:10] or 'online'
-            if title:
-                articles.append("%s (%s)\n%s" % (title, date, link))
-
+        for label, url, suffix in NatureRequest.FEEDS:
+            articles.extend(NatureRequest.latestFromFeed(label, url, suffix))
         if not articles:
-            return SimpleResponse("Sorry, I could not find any articles in the Nature feed.")
+            return SimpleResponse("Sorry, I could not fetch the article feeds right now.")
         return SimpleResponse(articles)
+
+    def latestFromFeed(label, url, titleSuffix):
+        try:
+            response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=20)
+            if response.status_code != 200:
+                logging.info(f"{label} feed failed with status {response.status_code}")
+                return []
+            # Works for both RSS 1.0 (rdf, namespaced tags) and RSS 2.0
+            root = ET.fromstring(response.content)
+            items = [el for el in root.iter() if el.tag.split('}')[-1] == 'item']
+            articles = []
+            for item in items[:NatureRequest.LATEST_COUNT]:
+                title = NatureRequest.childText(item, 'title')
+                link = NatureRequest.childText(item, 'link')
+                date = NatureRequest.childText(item, 'date') or NatureRequest.childText(item, 'pubDate')
+                if not title:
+                    continue
+                title = title.strip()
+                if titleSuffix and title.endswith(titleSuffix):
+                    title = title[:-len(titleSuffix)].strip()
+                articles.append("%s: %s (%s)\n%s" % (label, title, NatureRequest.formatDate(date), link))
+            return articles
+        except (ET.ParseError, requests.RequestException) as e:
+            logging.info(f"{label} feed could not be read: {e}")
+            return []
+
+    def childText(item, localName):
+        for child in item:
+            if child.tag.split('}')[-1] == localName and child.text:
+                return child.text.strip()
+        return ''
+
+    def formatDate(rawDate):
+        if not rawDate:
+            return 'online'
+        rawDate = rawDate.strip()
+        if ',' in rawDate:  # RFC 822 style: "Thu, 16 Oct 2026 12:34:00 +0000"
+            parts = rawDate.split(', ', 1)[-1].split(' ')
+            return ' '.join(parts[:3])
+        return rawDate[:10]  # ISO style: "2026-10-16T..."
