@@ -36,7 +36,7 @@ class RailRequest(Request):
         return {'train'}    
 
     def helpString(self):
-        return "train <station name or code>: Get realtime departure for a train station\n" + "train <station A> <station B>: Get realtime departures for a train from station A to station B. Stations can be a name (e.g. dartford) or a 3 letter code (e.g. DFD)"
+        return "train <station name or code>: Get realtime departure for a train station\n" + "train <station A>, <station B>: Get realtime departures for a train from station A to station B. Stations can be a name (e.g. slade green) or a 3 letter code (e.g. DFD). Separate the two stations with a comma"
 
     def handleRequest(self):
         logging.info ("I support this request type: " + self.command())
@@ -47,10 +47,20 @@ class RailRequest(Request):
         return RailRequest.getDepartureForStation(code, to)
 
     def resolveStationWords(words):
-        """Resolve 'train <station> [destination]' where either may be several words (e.g. slade green).
-        Tries every split of the words into a station part and a destination part and returns
-        (stationCode, destinationCode, None) for the first split where both resolve,
-        or (None, None, error message) if none do."""
+        """Resolve 'train <station> [, <destination>]' where either may be several words (e.g. slade green).
+        A comma is the preferred separator between the two stations and is unambiguous.
+        Without one, every split of the words into a station part and a destination part is tried."""
+        if any(word.endswith(',') for word in words):
+            parts = [part.strip() for part in " ".join(words).split(',') if part.strip()]
+            if len(parts) != 2:
+                return None, None, "Please use one comma to separate the two stations, e.g. train dartford, london victoria"
+            code, error = RailRequest.resolveStation(parts[0])
+            if error:
+                return None, None, error
+            to, error = RailRequest.resolveStation(parts[1])
+            if error:
+                return None, None, error
+            return code, to, None
         errors = []
         for k in range(0, len(words) - 1):
             code, error = RailRequest.resolveStation(" ".join(words[:k + 1]))
