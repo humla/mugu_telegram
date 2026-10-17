@@ -40,19 +40,32 @@ class RailRequest(Request):
 
     def handleRequest(self):
         logging.info ("I support this request type: " + self.command())
-        code, error = RailRequest.resolveStation(self.requestParams[1])
+        words = self.requestParams[1:]
+        code, to, error = RailRequest.resolveStationWords(words)
         if error:
             return SimpleResponse(error)
-        if (len(self.requestParams) > 2):
-            # The message is split on spaces, so try the full phrase first, then just the first word
-            to, error = RailRequest.resolveStation(" ".join(self.requestParams[2:]))
-            if error:
-                to, error = RailRequest.resolveStation(self.requestParams[2])
-            if error:
-                return SimpleResponse(error)
-        else:
-            to =  ""
         return RailRequest.getDepartureForStation(code, to)
+
+    def resolveStationWords(words):
+        """Resolve 'train <station> [destination]' where either may be several words (e.g. slade green).
+        Tries every split of the words into a station part and a destination part and returns
+        (stationCode, destinationCode, None) for the first split where both resolve,
+        or (None, None, error message) if none do."""
+        errors = []
+        for k in range(0, len(words) - 1):
+            code, error = RailRequest.resolveStation(" ".join(words[:k + 1]))
+            if error:
+                errors.append(error)
+                continue
+            to, error = RailRequest.resolveStation(" ".join(words[k + 1:]))
+            if error:
+                errors.append(error)
+                continue
+            return code, to, None
+        code, error = RailRequest.resolveStation(" ".join(words))
+        if not error:
+            return code, "", None
+        return None, None, errors[0] if errors else error
 
     def resolveStation(input):
         """Turn a station name or CRS code into a CRS code. Returns (code, None) on success or (None, error message)."""
@@ -101,7 +114,11 @@ class RailResponse(Response):
         self.details = stationBoardWithDetails
     
     def toTelegramString(self):
-        res = list(map(lambda a: ServiceItem(a).toString() ,self.details.trainServices.service))
+        services = getattr(self.details, 'trainServices', None)
+        services = services.service if services else []
+        if not services:
+            return ["National Rail: %s (%s) - no departing services found" % (self.details.locationName, self.details.crs)]
+        res = list(map(lambda a: ServiceItem(a).toString() ,services))
         locationName = self.details.locationName
         crs = self.details.crs
         res.insert(0, "National Rail: %s (%s)" % (locationName, crs))
