@@ -22,15 +22,33 @@ class StationCodeRequest(Request):
     def supportedCommands(self):
         return {'code'}
 
+    MAX_MATCHES = 10
+
     def helpString(self):
-        return "code <station name>: Not supported yet"
+        return "code <station name>: Get the CRS code for a station, e.g. code dartford"
 
     def handleRequest(self):
-        return SimpleResponse("")
-     
-    def lookupStation(stationName):  
-        pass
-
+        logging.info("Station code request")
+        query = " ".join(self.requestParams[1:]).lower()
+        if not query:
+            return SimpleResponse("Which station? e.g. code dartford")
+        codes = loadStationCodes()
+        if query in codes:
+            return SimpleResponse("%s is station code %s" % (query.title(), codes[query]))
+        if self.requestParams[1].upper() in codes.values():
+            code = self.requestParams[1].upper()
+            names = [name.title() for name, c in codes.items() if c == code]
+            return SimpleResponse("Station code %s is %s" % (code, " / ".join(names)))
+        matches = {name: code for name, code in codes.items() if query in name}
+        if not matches:
+            return SimpleResponse("I could not find a station called '%s'." % query.title())
+        lines = ["Stations matching '%s':" % query.title()]
+        for name, code in sorted(matches.items())[:StationCodeRequest.MAX_MATCHES]:
+            lines.append("%s is %s" % (name.title(), code))
+        if len(matches) > StationCodeRequest.MAX_MATCHES:
+            lines.append("... and %d more" % (len(matches) - StationCodeRequest.MAX_MATCHES))
+        return SimpleResponse(lines)
+ 
 class RailRequest(Request):
     def supportedCommands(self):
         return {'train'}    
