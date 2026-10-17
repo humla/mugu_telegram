@@ -21,6 +21,17 @@ except ImportError:
 
 _cached_codes = None
 
+# Newer stations not in older National Rail CSV datasets (e.g. Elizabeth line)
+EXTRA_STATIONS = {
+    'canary wharf': 'CWX',
+    'custom house': 'CUS',
+    'woolwich': 'WWC',
+    'tottenham court road': 'TCR',
+    'bond street': 'BDS',
+    'barking riverside': 'BGV',
+    'battersea power station': 'BAE',
+}
+
 def loadStationCodes():
     global _cached_codes
     if _cached_codes is not None:
@@ -36,6 +47,7 @@ def loadStationCodes():
                     name, code = row[i].strip(), row[i + 1].strip()
                     if name and code:
                         codes[name.lower()] = code
+    codes.update(EXTRA_STATIONS)
     _cached_codes = codes
     return codes
 
