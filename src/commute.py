@@ -94,10 +94,10 @@ class CommuteRequest(Request):
         self.user_id = user_id
 
     def supportedCommands(self):
-        return {'commute', 'set', 'home', 'work', 'my'}
+        return {'commute', 'c', 'set', 'home', 'work', 'my'}
 
     def helpString(self):
-        return ("commute : Realtime departures for your daily commute (detects morning/evening direction)\n"
+        return ("commute (or c) : Realtime departures for your daily commute (detects morning/evening direction)\n"
                 "set home <station> : Set your home station (e.g. set home dartford)\n"
                 "set work <station> : Set your work station (e.g. set work london bridge)\n"
                 "my stations : View your saved commute stations")
@@ -118,7 +118,7 @@ class CommuteRequest(Request):
             if len(self.requestParams) > 1 and self.requestParams[1].lower() in ('stations', 'commute'):
                 return self.handleRequest()
             return EmptyResponse()
-        elif cmd == 'commute':
+        elif cmd in ('commute', 'c'):
             return self.handleRequest()
         return EmptyResponse()
 
@@ -126,7 +126,7 @@ class CommuteRequest(Request):
         cmd = self.command()
 
         # Handle 'my stations' or 'my commute'
-        if cmd == 'my' or (cmd == 'commute' and len(self.requestParams) > 1 and self.requestParams[1].lower() in ('settings', 'stations')):
+        if cmd == 'my' or (cmd in ('commute', 'c') and len(self.requestParams) > 1 and self.requestParams[1].lower() in ('settings', 'stations')):
             return self._handleShowSettings()
 
         # Handle 'set home <station>' or 'home <station>'
@@ -139,8 +139,8 @@ class CommuteRequest(Request):
             words = self.requestParams[2:] if cmd == 'set' else self.requestParams[1:]
             return self._handleSetStation('work', words)
 
-        # Handle 'commute'
-        if cmd == 'commute':
+        # Handle 'commute' or 'c'
+        if cmd in ('commute', 'c'):
             return self._handleCommute()
 
         return EmptyResponse()

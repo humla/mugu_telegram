@@ -48,7 +48,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "👋 <b>Welcome! I'm your UK travel & utility bot.</b>\n\n"
         "Here are some things I can do:\n"
-        "• <code>commute</code> - Live train times for your daily commute\n"
+        "• <code>commute</code> (or <code>c</code>) - Live train times for your daily commute\n"
         "• <code>train &lt;origin&gt; to &lt;dest&gt;</code> - Realtime train departures\n"
         "• <code>code &lt;station&gt;</code> - National Rail station CRS codes\n"
         "• <code>fuel &lt;postcode&gt;</code> - Costco fuel prices\n"
