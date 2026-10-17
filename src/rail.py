@@ -4,6 +4,7 @@ import csv
 import os
 import re
 import html
+import datetime
 
 try:
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -327,8 +328,10 @@ class RailResponse(Response):
             lines.append("<i>No departing services found in the next 2 hours.</i>")
             return lines
 
+        ref_dt = getattr(self.details, 'generatedAt', None)
+
         for s in services[:10]:
-            lines.append(ServiceItem(s).toFormattedString())
+            lines.append(ServiceItem(s, ref_dt=ref_dt).toFormattedString())
 
         return lines
 
@@ -352,8 +355,47 @@ class RailResponse(Response):
         return "HTML"
 
 
+def get_ref_time(ref_dt=None):
+    if isinstance(ref_dt, datetime.datetime):
+        try:
+            local_dt = ref_dt.astimezone() if ref_dt.tzinfo else ref_dt
+            return local_dt.hour, local_dt.minute
+        except Exception:
+            return ref_dt.hour, ref_dt.minute
+    now = datetime.datetime.now()
+    return now.hour, now.minute
+
+
+def get_relative_minute_string(target_time_str, ref_dt=None):
+    """If target_time_str (HH:MM) is within the next 60 minutes, return '(in X mins)'.
+    For departures 1 hour or more away, returns empty string."""
+    if not target_time_str or not re.match(r"^\d{1,2}:\d{2}$", target_time_str):
+        return ""
+    try:
+        t_hour, t_min = map(int, target_time_str.split(":"))
+        ref_hour, ref_min = get_ref_time(ref_dt)
+
+        diff = (t_hour * 60 + t_min) - (ref_hour * 60 + ref_min)
+        # Handle midnight rollover (e.g. ref=23:55, target=00:15 -> diff = 20)
+        if diff < -12 * 60:
+            diff += 24 * 60
+        elif diff > 12 * 60:
+            diff -= 24 * 60
+
+        # Only display for departures less than 1 hour away (0 to 59 minutes)
+        if diff <= 0 and diff >= -2:
+            return "(in 0 mins)"
+        elif diff == 1:
+            return "(in 1 min)"
+        elif 1 < diff < 60:
+            return f"(in {diff} mins)"
+        return ""
+    except Exception:
+        return ""
+
+
 class ServiceItem:
-    def __init__(self, serviceItem):
+    def __init__(self, serviceItem, ref_dt=None):
         logging.debug(serviceItem)
         self.std = getattr(serviceItem, 'std', '')
         self.etd = getattr(serviceItem, 'etd', '')
@@ -361,6 +403,15 @@ class ServiceItem:
         self.cancelReason = getattr(serviceItem, 'cancelReason', None)
         self.delayReason = getattr(serviceItem, 'delayReason', None)
         self.platform = getattr(serviceItem, 'platform', None)
+        self.ref_dt = ref_dt
+
+        # Compute relative minutes for anything less than 1 hour away
+        if self.isCancelled:
+            self.relative_time = ""
+        elif re.match(r"^\d{1,2}:\d{2}$", self.etd):
+            self.relative_time = get_relative_minute_string(self.etd, ref_dt=ref_dt)
+        else:
+            self.relative_time = get_relative_minute_string(self.std, ref_dt=ref_dt)
 
         dest_loc = getattr(serviceItem, 'destination', None)
         if dest_loc and hasattr(dest_loc, 'location') and dest_loc.location:
@@ -371,6 +422,7 @@ class ServiceItem:
     def toFormattedString(self):
         dest = html.escape(self.destination)
         plat = f" • Plat {html.escape(str(self.platform))}" if self.platform and str(self.platform) != "NA" else ""
+        rel = f" {self.relative_time}" if self.relative_time else ""
 
         if self.isCancelled:
             line = f"🔴 <b>{self.std}</b> <s>{dest}</s>{plat} • <i>Cancelled</i>"
@@ -378,15 +430,16 @@ class ServiceItem:
                 line += f"\n   ↳ <i>{html.escape(self.cancelReason)}</i>"
             return line
         elif self.etd.lower() == "on time":
-            return f"🟢 <b>{self.std}</b> {dest}{plat} • <i>On time</i>"
+            return f"🟢 <b>{self.std}</b>{rel} {dest}{plat} • <i>On time</i>"
         else:
             exp_text = f"Exp {html.escape(self.etd)}" if self.etd.lower() != "delayed" else "Delayed"
-            line = f"🟡 <b>{self.std}</b> {dest}{plat} • <i>{exp_text} (was {self.std})</i>"
+            line = f"🟡 <b>{self.std}</b>{rel} {dest}{plat} • <i>{exp_text} (was {self.std})</i>"
             if self.delayReason:
                 line += f"\n   ↳ <i>{html.escape(self.delayReason)}</i>"
             return line
 
     def toString(self):
+        rel = f" {self.relative_time}" if self.relative_time else ""
         timing = self.std if self.etd.lower() == "on time" else f"{self.etd} ({self.std})"
         plat = f" P:{self.platform}" if self.platform else ""
-        return f"{timing} {self.destination}{plat}"
+        return f"{timing}{rel} {self.destination}{plat}"
