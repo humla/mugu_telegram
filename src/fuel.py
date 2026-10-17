@@ -1,5 +1,6 @@
 from req import Request, Response, SimpleResponse, EmptyResponse
 from util import logging
+import re
 import requests
 
 class FuelPriceRequest(Request):
@@ -7,11 +8,15 @@ class FuelPriceRequest(Request):
         return {'fuel'}
 
     def helpString(self):
-        return "fuel : Shows the price of fuel from Costco Thurrock"
+        return "fuel : Shows the price of fuel from Costco Thurrock\n" + \
+               "fuel <postcode>: Shows the price of fuel from Costco stores near that postcode"
 
     def handleRequest(self):
         logging.info("Fuel price request")
-        url = "https://www.costco.co.uk/store-finder/search?q=da1"
+        postcode = self.requestParams[1].lower() if len(self.requestParams) > 1 else "da1"
+        if not re.fullmatch(r"[a-z0-9]{2,4}", postcode):
+            return SimpleResponse("'%s' does not look like a postcode. Try e.g. fuel DA1" % postcode)
+        url = "https://www.costco.co.uk/store-finder/search?q=" + postcode
 
         response = requests.get(url)
 
@@ -38,8 +43,7 @@ class FuelPriceRequest(Request):
 
             return SimpleResponse(gas_info)
         else:
-            print(f"Request failed with status code {response.status_code}")
-            logging.info(response)
-        return SimpleResponse("Sample Response")
+            logging.info(f"Request failed with status code {response.status_code}")
+            return SimpleResponse("Sorry, I could not fetch fuel prices right now (HTTP %d)." % response.status_code)
 
 
