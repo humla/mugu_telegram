@@ -23,7 +23,7 @@ class StationCodeRequest(Request):
         return {'code'}
 
     def helpString(self):
-        return "code <station name>: Get the crif code for a station."
+        return "code <station name>: Not supported yet"
 
     def handleRequest(self):
         return SimpleResponse("")
