@@ -51,6 +51,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>commute</code> (or <code>c</code>) - Live train times for your daily commute\n"
         "• <code>train &lt;origin&gt; to &lt;dest&gt;</code> - Realtime train departures\n"
         "• <code>code &lt;station&gt;</code> - National Rail station CRS codes\n"
+        "• <code>tube &lt;station&gt;</code> - Live tube, DLR, Overground &amp; Elizabeth line departures\n"
+        "• <code>bus &lt;stop name&gt;</code> - Live bus stop arrivals\n"
         "• <code>fuel &lt;postcode&gt;</code> - UK fuel prices near a postcode (Fuel Finder)\n"
         "• <code>nature</code> - Latest articles from Nature & NatGeo\n\n"
         "💡 <i>Tip: Set your commute with <code>set home &lt;station&gt;</code> and <code>set work &lt;station&gt;</code>!</i>"
@@ -114,6 +116,22 @@ async def handleCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception as e:
                 logging.debug(f"Edit message exception on set station callback: {e}")
+
+    elif data.startswith("tfl:"):
+        parts = data.split(":")
+        if len(parts) >= 3:
+            mode, stop_id = parts[1], parts[2]
+            resp = TflRequest.getArrivalsForStop(mode, stop_id)
+            lines = resp.toTelegramString()
+            message_text = "\n".join(lines) if isinstance(lines, list) else str(lines)
+            try:
+                await query.edit_message_text(
+                    text=message_text,
+                    reply_markup=resp.replyMarkup(),
+                    parse_mode=resp.parseMode()
+                )
+            except Exception as e:
+                logging.debug(f"Edit message exception on tfl callback: {e}")
 
     elif data == "commute:now":
         resp = CommuteRequest(["COMMUTE"], user_id=user_id).handleRequest()
