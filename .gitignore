@@ -2,6 +2,7 @@
 *.swp
 out
 res/user_settings.json
+res/fuel_finder_cache.json
 user_settings.json
 
 # Byte-compiled / optimized / DLL files

@@ -51,7 +51,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>commute</code> (or <code>c</code>) - Live train times for your daily commute\n"
         "• <code>train &lt;origin&gt; to &lt;dest&gt;</code> - Realtime train departures\n"
         "• <code>code &lt;station&gt;</code> - National Rail station CRS codes\n"
-        "• <code>fuel &lt;postcode&gt;</code> - Costco fuel prices\n"
+        "• <code>fuel &lt;postcode&gt;</code> - UK fuel prices near a postcode (Fuel Finder)\n"
         "• <code>nature</code> - Latest articles from Nature & NatGeo\n\n"
         "💡 <i>Tip: Set your commute with <code>set home &lt;station&gt;</code> and <code>set work &lt;station&gt;</code>!</i>"
     )
