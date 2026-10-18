@@ -12,12 +12,97 @@ except ImportError:
     InlineKeyboardButton = None
     InlineKeyboardMarkup = None
 
-try:
-    from suds.client import Client
-    from suds.sax.element import Element
-except ImportError:
-    Client = None
-    Element = None
+import requests
+import xml.etree.ElementTree as ET
+
+# National Rail Darwin Live Departure Board SOAP service (OpenLDBWS ver 2021-11-01).
+# Called directly with a hand-built envelope instead of via suds: no WSDL
+# download/parse per client and no SOAP-to-Python binding marshalling.
+SOAP_ENDPOINT = "https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx"
+SOAP_ACTION = "http://thalesgroup.com/RTTI/2015-05-14/ldb/GetDepBoardWithDetails"
+SOAP_ENVELOPE_NS = "http://schemas.xmlsoap.org/soap/envelope/"
+LDB_NS = "http://thalesgroup.com/RTTI/2021-11-01/ldb/"
+TOKEN_NS = "http://thalesgroup.com/RTTI/2013-11-28/Token/types"
+
+# Reused across requests so the TCP/TLS connection to National Rail is pooled.
+_soap_session = requests.Session()
+
+def _localName(tag):
+    return tag.rsplit('}', 1)[-1]
+
+def _child(element, name):
+    """First direct child element with the given namespace-agnostic name."""
+    if element is None:
+        return None
+    for child in element:
+        if _localName(child.tag) == name:
+            return child
+    return None
+
+def _childText(element, name, default=""):
+    child = _child(element, name)
+    if child is not None and child.text is not None:
+        return child.text
+    return default
+
+def _parseService(service_el):
+    destination = "Unknown"
+    dest = _child(service_el, "destination")
+    location_el = _child(dest, "location")
+    if location_el is not None:
+        destination = _childText(location_el, "locationName", "Unknown")
+    return {
+        "std": _childText(service_el, "std", ""),
+        "etd": _childText(service_el, "etd", ""),
+        "isCancelled": _childText(service_el, "isCancelled").lower() == "true",
+        "cancelReason": _childText(service_el, "cancelReason") or None,
+        "delayReason": _childText(service_el, "delayReason") or None,
+        "platform": _childText(service_el, "platform") or None,
+        "destination": destination,
+    }
+
+def _parseBoardResponse(xml_content):
+    """Parse a GetDepBoardWithDetails SOAP response into a plain dict."""
+    root = ET.fromstring(xml_content)
+    fault = root.find(f".//{{{SOAP_ENVELOPE_NS}}}Fault")
+    if fault is not None:
+        faultstring = _childText(fault, "faultstring", "unknown SOAP fault")
+        raise RuntimeError(f"National Rail SOAP error: {faultstring}")
+
+    result = None
+    for element in root.iter():
+        if _localName(element.tag) == "GetStationBoardResult":
+            result = element
+            break
+    if result is None:
+        raise RuntimeError("Unexpected National Rail response: no board data")
+
+    board = {
+        "locationName": _childText(result, "locationName", "Unknown"),
+        "crs": _childText(result, "crs", ""),
+        "generatedAt": _childText(result, "generatedAt"),
+        "nrccMessages": [],
+        "trainServices": [],
+    }
+    generated = board["generatedAt"]
+    if generated:
+        try:
+            board["generatedAt"] = datetime.datetime.fromisoformat(generated.replace("Z", "+00:00"))
+        except ValueError:
+            board["generatedAt"] = None
+
+    nrcc = _child(result, "nrccMessages")
+    if nrcc is not None:
+        for msg in nrcc:
+            if _localName(msg.tag) == "message" and msg.text:
+                board["nrccMessages"].append(msg.text)
+
+    services = _child(result, "trainServices")
+    if services is not None:
+        for service_el in services:
+            if _localName(service_el.tag) == "service":
+                board["trainServices"].append(_parseService(service_el))
+    return board
 
 _cached_codes = None
 
@@ -282,32 +367,61 @@ class RailRequest(Request):
     @staticmethod
     def getDepartureForStation(stationId, to=""):
         try:
-            api_address = "https://lite.realtime.nationalrail.co.uk/OpenLDBWS/wsdl.aspx?ver=2021-11-01"
             api_token = RailRequest.apiKey()
 
-            client = Client(api_address)
-            header = Element("AccessToken").append(Element("TokenValue").setText(api_token))
-            client.set_options(soapheaders=header)
+            envelope_parts = [
+                '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">',
+                "<soap:Header>",
+                f'<t:AccessToken xmlns:t="{TOKEN_NS}"><t:TokenValue>{html.escape(api_token)}</t:TokenValue></t:AccessToken>',
+                "</soap:Header>",
+                "<soap:Body>",
+                f'<ldb:GetDepBoardWithDetailsRequest xmlns:ldb="{LDB_NS}">',
+                "<ldb:numRows>10</ldb:numRows>",
+                f"<ldb:crs>{html.escape(stationId)}</ldb:crs>",
+            ]
+            if to:
+                envelope_parts.append(f"<ldb:filterCrs>{html.escape(to)}</ldb:filterCrs>")
+            envelope_parts += [
+                "<ldb:filterType>to</ldb:filterType>",
+                "<ldb:timeOffset>0</ldb:timeOffset>",
+                "<ldb:timeWindow>120</ldb:timeWindow>",
+                "</ldb:GetDepBoardWithDetailsRequest>",
+                "</soap:Body>",
+                "</soap:Envelope>",
+            ]
 
-            result = client.service.GetDepBoardWithDetails(
-                numRows="10",
-                crs=stationId,
-                filterCrs=to if to else None,
-                filterType="to",
-                timeOffset="0",
-                timeWindow="120"
+            response = _soap_session.post(
+                SOAP_ENDPOINT,
+                data="".join(envelope_parts).encode("utf-8"),
+                headers={
+                    "Content-Type": "text/xml; charset=utf-8",
+                    "SOAPAction": SOAP_ACTION,
+                },
+                timeout=15,
             )
-            return RailResponse(result, to)
+            if response.status_code != 200:
+                # ASP.NET returns SOAP faults with an HTTP 500 status; surface
+                # the real fault message (e.g. "Invalid crs code supplied").
+                try:
+                    fault = ET.fromstring(response.content).find(f".//{{{SOAP_ENVELOPE_NS}}}Fault")
+                    if fault is not None:
+                        raise RuntimeError(f"National Rail: {_childText(fault, 'faultstring', 'SOAP error')}")
+                except ET.ParseError:
+                    pass
+                raise RuntimeError(f"HTTP {response.status_code} from National Rail")
+
+            board = _parseBoardResponse(response.content)
+            return RailResponse(board, to)
         except Exception as e:
             logging.error(f"Error fetching rail departures for {stationId} -> {to}: {e}")
             return SimpleResponse(f"Sorry, unable to fetch train departures right now ({html.escape(str(e))}).", parse_mode="HTML")
 
 
 class RailResponse(Response):
-    def __init__(self, stationBoardWithDetails, filterTo=""):
-        self.details = stationBoardWithDetails
+    def __init__(self, board, filterTo=""):
+        self.board = board  # parsed departure board dict, see _parseBoardResponse
         self.filterTo = filterTo
-    
+
     def destinationLabel(self):
         if not self.filterTo:
             return ""
@@ -317,30 +431,27 @@ class RailResponse(Response):
         return f" ➔ {html.escape(name)} ({html.escape(self.filterTo)})"
 
     def toTelegramString(self):
-        services = getattr(self.details, 'trainServices', None)
-        services = services.service if services else []
-        locationName = html.escape(getattr(self.details, 'locationName', 'Unknown'))
-        crs = html.escape(getattr(self.details, 'crs', ''))
+        services = self.board.get("trainServices", [])
+        locationName = html.escape(self.board.get("locationName", "Unknown"))
+        crs = html.escape(self.board.get("crs", ""))
         header = f"🚆 <b>National Rail: {locationName} ({crs}){self.destinationLabel()}</b>"
         divider = "━━━━━━━━━━━━━━━━━━━━"
         lines = [header, divider]
 
         # Check for NRCC disruption alerts on the board
-        nrcc = getattr(self.details, 'nrccMessages', None)
-        if nrcc and hasattr(nrcc, 'message') and nrcc.message:
-            for msg in nrcc.message[:1]:
-                clean_msg = re.sub(r'<[^>]+>', '', str(msg)).strip()
-                clean_msg = re.sub(r'\s+', ' ', clean_msg)
-                if clean_msg:
-                    if len(clean_msg) > 140:
-                        clean_msg = clean_msg[:137] + "..."
-                    lines.append(f"⚠️ <i>{html.escape(clean_msg)}</i>\n")
+        for msg in self.board.get("nrccMessages", [])[:1]:
+            clean_msg = re.sub(r'<[^>]+>', '', str(msg)).strip()
+            clean_msg = re.sub(r'\s+', ' ', clean_msg)
+            if clean_msg:
+                if len(clean_msg) > 140:
+                    clean_msg = clean_msg[:137] + "..."
+                lines.append(f"⚠️ <i>{html.escape(clean_msg)}</i>\n")
 
         if not services:
             lines.append("<i>No departing services found in the next 2 hours.</i>")
             return lines
 
-        ref_dt = getattr(self.details, 'generatedAt', None)
+        ref_dt = self.board.get("generatedAt")
 
         for s in services[:10]:
             lines.append(ServiceItem(s, ref_dt=ref_dt).toFormattedString())
@@ -350,7 +461,7 @@ class RailResponse(Response):
     def replyMarkup(self):
         if not InlineKeyboardMarkup or not InlineKeyboardButton:
             return None
-        crs = getattr(self.details, 'crs', '')
+        crs = self.board.get("crs", "")
         buttons = []
         if self.filterTo:
             buttons.append([
@@ -407,14 +518,14 @@ def get_relative_minute_string(target_time_str, ref_dt=None):
 
 
 class ServiceItem:
-    def __init__(self, serviceItem, ref_dt=None):
-        logging.debug(serviceItem)
-        self.std = getattr(serviceItem, 'std', '')
-        self.etd = getattr(serviceItem, 'etd', '')
-        self.isCancelled = getattr(serviceItem, 'isCancelled', False) or (self.etd.lower() == 'cancelled')
-        self.cancelReason = getattr(serviceItem, 'cancelReason', None)
-        self.delayReason = getattr(serviceItem, 'delayReason', None)
-        self.platform = getattr(serviceItem, 'platform', None)
+    def __init__(self, service, ref_dt=None):
+        self.std = service.get("std", "")
+        self.etd = service.get("etd", "")
+        self.isCancelled = service.get("isCancelled", False) or (self.etd.lower() == 'cancelled')
+        self.cancelReason = service.get("cancelReason")
+        self.delayReason = service.get("delayReason")
+        self.platform = service.get("platform")
+        self.destination = service.get("destination", "Unknown")
         self.ref_dt = ref_dt
 
         # Compute relative minutes for anything less than 1 hour away
@@ -424,12 +535,6 @@ class ServiceItem:
             self.relative_time = get_relative_minute_string(self.etd, ref_dt=ref_dt)
         else:
             self.relative_time = get_relative_minute_string(self.std, ref_dt=ref_dt)
-
-        dest_loc = getattr(serviceItem, 'destination', None)
-        if dest_loc and hasattr(dest_loc, 'location') and dest_loc.location:
-            self.destination = dest_loc.location[0].locationName
-        else:
-            self.destination = "Unknown"
 
     def toFormattedString(self):
         dest = html.escape(self.destination)
