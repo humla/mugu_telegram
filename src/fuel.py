@@ -290,6 +290,22 @@ def html_escape(text):
     return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def cheapestLines(lat, lon, stations):
+    """One '🟢 Cheapest ...' line per headline fuel grade among the given stations."""
+    lines = []
+    for fuel_type in SUMMARY_FUELS:
+        priced = [(stationPrice(s, fuel_type), s) for s in stations]
+        priced = [(p, s) for p, s in priced if p is not None]
+        if priced:
+            price, station = min(priced, key=lambda pair: pair[0])
+            distance = haversineMiles(lat, lon, float(station["location"]["latitude"]),
+                                      float(station["location"]["longitude"]))
+            label = FUEL_LABELS.get(fuel_type, fuel_type)
+            lines.append(
+                f"🟢 Cheapest {label}: <b>{price:.1f}p</b> — {html_escape(station.get('brand_name', ''))} ({distance:.1f} mi)")
+    return lines
+
+
 class FuelFinderResponse(Response):
     def __init__(self, postcode_label, lat, lon, stations):
         self.postcode_label = postcode_label
@@ -301,18 +317,7 @@ class FuelFinderResponse(Response):
         lines = [f"⛽ <b>Fuel prices near {html_escape(self.postcode_label)}</b>",
                  "━━━━━━━━━━━━━━━━━━━━"]
 
-        cheapest_lines = []
-        for fuel_type in SUMMARY_FUELS:
-            priced = [(stationPrice(s, fuel_type), s) for s in self.stations]
-            priced = [(p, s) for p, s in priced if p is not None]
-            if priced:
-                price, station = min(priced, key=lambda pair: pair[0])
-                distance = haversineMiles(self.lat, self.lon, float(station["location"]["latitude"]),
-                                          float(station["location"]["longitude"]))
-                label = FUEL_LABELS.get(fuel_type, fuel_type)
-                cheapest_lines.append(
-                    f"🟢 Cheapest {label}: <b>{price:.1f}p</b> — {html_escape(station.get('brand_name', ''))} ({distance:.1f} mi)")
-        lines.extend(cheapest_lines)
+        lines.extend(cheapestLines(self.lat, self.lon, self.stations))
 
         lines.append("")
         lines.append("<b>Nearest stations:</b>")
@@ -361,27 +366,34 @@ class FuelPriceRequest(Request):
             return SimpleResponse(f"I could not find the postcode '{html_escape(raw)}'.")
 
         lat, lon, label = place
+        return fuelPricesNear(lat, lon, label)
+
+
+def stationsNear(lat, lon, max_miles=10):
+    """Open fuel stations within max_miles of a point, nearest first.
+    Raises FuelFinderError when the price data cannot be loaded."""
+    stations = []
+    for station in ensureCache()["stations"]:
+        if station.get("temporary_closure") or station.get("permanent_closure"):
+            continue
+        location = station.get("location", {})
         try:
-            cache = ensureCache()
-        except FuelFinderError as e:
-            logging.error(f"Fuel Finder error: {e}")
-            return SimpleResponse("Sorry, I could not fetch fuel prices from Fuel Finder right now.")
+            slat, slon = float(location["latitude"]), float(location["longitude"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        distance = haversineMiles(lat, lon, slat, slon)
+        if distance <= max_miles:
+            stations.append((distance, station))
+    stations.sort(key=lambda pair: pair[0])
+    return [s for _, s in stations]
 
-        stations = []
-        for station in cache["stations"]:
-            if station.get("temporary_closure") or station.get("permanent_closure"):
-                continue
-            location = station.get("location", {})
-            try:
-                slat, slon = float(location["latitude"]), float(location["longitude"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            distance = haversineMiles(lat, lon, slat, slon)
-            if distance <= 10:
-                stations.append((distance, station))
 
-        if not stations:
-            return SimpleResponse(f"I found no fuel stations within 10 miles of {html_escape(label)}.")
-
-        stations.sort(key=lambda pair: pair[0])
-        return FuelFinderResponse(label, lat, lon, [s for _, s in stations[:NEAREST_COUNT]])
+def fuelPricesNear(lat, lon, label):
+    try:
+        stations = stationsNear(lat, lon)
+    except FuelFinderError as e:
+        logging.error(f"Fuel Finder error: {e}")
+        return SimpleResponse("Sorry, I could not fetch fuel prices from Fuel Finder right now.")
+    if not stations:
+        return SimpleResponse(f"I found no fuel stations within 10 miles of {html_escape(label)}.")
+    return FuelFinderResponse(label, lat, lon, stations[:NEAREST_COUNT])

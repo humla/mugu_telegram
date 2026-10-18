@@ -1,14 +1,16 @@
 #!/usr/bin/python3
 
+import html
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 import req, rail, tfl, hello, util, nature, commute
 from req import EmptyResponse
 from tfl import TflRequest
 from rail import RailRequest, StationCodeRequest
-from fuel import FuelPriceRequest
+from fuel import FuelPriceRequest, fuelPricesNear
 from nature import NatureRequest
 from commute import CommuteRequest, saveUserCommute, getUserSettings
+from nearby import NearbyRequest, nearbyResponse, NEW_MESSAGE_PREFIX
 from util import logging
 
 
@@ -20,6 +22,7 @@ def allRequestHandlers(messages, user_id=None):
         StationCodeRequest(messages),
         FuelPriceRequest(messages),
         NatureRequest(messages),
+        NearbyRequest(messages),
     ]
 
 def getResponseObject(messages, user_id=None):
@@ -47,21 +50,28 @@ def buildHelpString():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "👋 <b>Welcome! I'm your UK travel & utility bot.</b>\n\n"
-        "Here are some things I can do:\n"
-        "• <code>commute</code> (or <code>c</code>) - Live train times for your daily commute\n"
-        "• <code>train &lt;origin&gt; to &lt;dest&gt;</code> - Realtime train departures\n"
-        "• <code>code &lt;station&gt;</code> - National Rail station CRS codes\n"
-        "• <code>tube &lt;station&gt;</code> - Live tube, DLR, Overground &amp; Elizabeth line departures\n"
-        "• <code>bus &lt;stop name&gt;</code> - Live bus stop arrivals\n"
-        "• <code>fuel &lt;postcode&gt;</code> - UK fuel prices near a postcode (Fuel Finder)\n"
-        "• <code>nature</code> - Latest articles from Nature & NatGeo\n\n"
-        "💡 <i>Tip: Set your commute with <code>set home &lt;station&gt;</code> and <code>set work &lt;station&gt;</code>!</i>"
+        "Here are the things I can do:\n"
+        f"{html.escape(buildHelpString(), quote=False)}\n\n"
+        "💡 <i>Type <code>help</code> any time to see this list again.</i>"
     )
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=welcome_text,
         parse_mode="HTML"
     )
+
+def callbackResponse(data, user_id):
+    """The board a button asks for, or None for unknown button data."""
+    parts = data.split(":")
+    if data.startswith("train:") and len(parts) >= 3:
+        return RailRequest.getDepartureForStation(parts[1], parts[2])
+    if data.startswith("tfl:") and len(parts) >= 3:
+        return TflRequest.getArrivalsForStop(parts[1], parts[2])
+    if data.startswith("fuel:") and len(parts) >= 3:
+        return fuelPricesNear(float(parts[1]), float(parts[2]), "your location")
+    if data == "commute:now":
+        return CommuteRequest(["COMMUTE"], user_id=user_id).handleRequest()
+    return None
 
 async def handleCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -71,23 +81,7 @@ async def handleCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = str(update.effective_user.id) if update.effective_user else str(update.effective_chat.id)
 
-    if data.startswith("train:"):
-        parts = data.split(":")
-        if len(parts) >= 3:
-            from_crs, to_crs = parts[1], parts[2]
-            resp = RailRequest.getDepartureForStation(from_crs, to_crs)
-            lines = resp.toTelegramString()
-            message_text = "\n".join(lines) if isinstance(lines, list) else str(lines)
-            try:
-                await query.edit_message_text(
-                    text=message_text,
-                    reply_markup=resp.replyMarkup(),
-                    parse_mode=resp.parseMode()
-                )
-            except Exception as e:
-                logging.debug(f"Edit message exception on train callback: {e}")
-
-    elif data.startswith("sethome:") or data.startswith("setwork:"):
+    if data.startswith("sethome:") or data.startswith("setwork:"):
         setting_type = "home" if data.startswith("sethome:") else "work"
         parts = data.split(":", 2)
         if len(parts) >= 3:
@@ -116,35 +110,45 @@ async def handleCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception as e:
                 logging.debug(f"Edit message exception on set station callback: {e}")
+        return
 
-    elif data.startswith("tfl:"):
-        parts = data.split(":")
-        if len(parts) >= 3:
-            mode, stop_id = parts[1], parts[2]
-            resp = TflRequest.getArrivalsForStop(mode, stop_id)
-            lines = resp.toTelegramString()
-            message_text = "\n".join(lines) if isinstance(lines, list) else str(lines)
-            try:
-                await query.edit_message_text(
-                    text=message_text,
-                    reply_markup=resp.replyMarkup(),
-                    parse_mode=resp.parseMode()
-                )
-            except Exception as e:
-                logging.debug(f"Edit message exception on tfl callback: {e}")
+    # Buttons on the nearby board open a new message so the board stays put;
+    # every other button replaces the message it is attached to.
+    new_message = data.startswith(NEW_MESSAGE_PREFIX)
+    if new_message:
+        data = data[len(NEW_MESSAGE_PREFIX):]
+    resp = callbackResponse(data, user_id)
+    if resp is None:
+        return
 
-    elif data == "commute:now":
-        resp = CommuteRequest(["COMMUTE"], user_id=user_id).handleRequest()
-        lines = resp.toTelegramString()
-        message_text = "\n".join(lines) if isinstance(lines, list) else str(lines)
-        try:
-            await query.edit_message_text(
-                text=message_text,
-                reply_markup=resp.replyMarkup(),
-                parse_mode=resp.parseMode()
-            )
-        except Exception as e:
-            logging.debug(f"Edit message exception on commute callback: {e}")
+    lines = resp.toTelegramString()
+    message_text = "\n".join(lines) if isinstance(lines, list) else str(lines)
+    if new_message:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message_text,
+            reply_markup=resp.replyMarkup(),
+            parse_mode=resp.parseMode()
+        )
+        return
+    try:
+        await query.edit_message_text(
+            text=message_text,
+            reply_markup=resp.replyMarkup(),
+            parse_mode=resp.parseMode()
+        )
+    except Exception as e:
+        logging.debug(f"Edit message exception on {data} callback: {e}")
+
+async def handleLocation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    location = update.message.location
+    resp = nearbyResponse(location.latitude, location.longitude)
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="\n".join(resp.toTelegramString()),
+        reply_markup=resp.replyMarkup(),
+        parse_mode=resp.parseMode()
+    )
 
 async def handleMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -181,6 +185,9 @@ if __name__ == '__main__':
     start_handler = CommandHandler('start', start)
     application.add_handler(start_handler)
     application.add_handler(CallbackQueryHandler(handleCallback))
+    # New location messages only: a live location also sends an edited message
+    # every few seconds, which would otherwise repost the board each time.
+    application.add_handler(MessageHandler(filters.LOCATION & filters.UpdateType.MESSAGE, handleLocation))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handleMessage))
     
     application.run_polling()
