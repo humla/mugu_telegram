@@ -444,8 +444,10 @@ class ServiceItem:
         elif self.etd.lower() == "on time":
             return f"🟢 <b>{self.std}</b>{rel} {dest}{plat} • <i>On time</i>"
         else:
-            exp_text = f"Exp {html.escape(self.etd)}" if self.etd.lower() != "delayed" else "Delayed"
-            line = f"🟡 <b>{self.std}</b>{rel} {dest}{plat} • <i>{exp_text} (was {self.std})</i>"
+            if self.etd.lower() == "delayed":
+                line = f"🟡 <b>Delayed</b> (was {self.std}){rel} {dest}{plat}"
+            else:
+                line = f"🟡 <b>Exp {html.escape(self.etd)}</b> (was {self.std}){rel} {dest}{plat} • <i>Delayed</i>"
             if self.delayReason:
                 line += f"\n   ↳ <i>{html.escape(self.delayReason)}</i>"
             return line
