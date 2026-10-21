@@ -11,6 +11,7 @@ from fuel import FuelPriceRequest, fuelPricesNear
 from nature import NatureRequest
 from commute import CommuteRequest, saveUserCommute, getUserSettings
 from nearby import NearbyRequest, nearbyResponse, NEW_MESSAGE_PREFIX
+from vehicle import VehicleRequest
 from util import logging
 
 
@@ -23,6 +24,7 @@ def allRequestHandlers(messages, user_id=None):
         FuelPriceRequest(messages),
         NatureRequest(messages),
         NearbyRequest(messages),
+        VehicleRequest(messages),
     ]
 
 def getResponseObject(messages, user_id=None):
