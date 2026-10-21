@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 
 import html
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, TypeHandler, filters
 import req, rail, tfl, hello, util, nature, commute
 from req import EmptyResponse
 from tfl import TflRequest
@@ -12,6 +12,8 @@ from nature import NatureRequest
 from commute import CommuteRequest, saveUserCommute, getUserSettings
 from nearby import NearbyRequest, nearbyResponse, NEW_MESSAGE_PREFIX
 from vehicle import VehicleRequest
+from lookup import WikiRequest, DefineRequest, TimeRequest, NewsRequest
+import access
 from util import logging
 
 
@@ -25,6 +27,10 @@ def allRequestHandlers(messages, user_id=None):
         NatureRequest(messages),
         NearbyRequest(messages),
         VehicleRequest(messages),
+        WikiRequest(messages),
+        DefineRequest(messages),
+        TimeRequest(messages),
+        NewsRequest(messages),
     ]
 
 def getResponseObject(messages, user_id=None):
@@ -82,6 +88,10 @@ async def handleCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info(f"Callback query received: {data}")
 
     user_id = str(update.effective_user.id) if update.effective_user else str(update.effective_chat.id)
+
+    if data.startswith("access:"):
+        await access.handleAccessCallback(update, context)
+        return
 
     if data.startswith("sethome:") or data.startswith("setwork:"):
         setting_type = "home" if data.startswith("sethome:") else "work"
@@ -158,7 +168,10 @@ async def handleMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     logging.info('New request: ' + text)
     if text.lower() == "help":
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=buildHelpString())
+        help_text = buildHelpString() + access.ownerHelp(update.effective_user.id)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=help_text)
+        return
+    if await access.handleAccessCommand(update, context, text.lower().split()):
         return
 
     user_id = str(update.effective_user.id) if update.effective_user else str(update.effective_chat.id)
@@ -177,19 +190,22 @@ async def handleMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=update.effective_chat.id,
         text=message_text,
         reply_markup=resp.replyMarkup(),
-        parse_mode=resp.parseMode()
+        parse_mode=resp.parseMode(),
+        link_preview_options=LinkPreviewOptions(is_disabled=True) if resp.disableLinkPreview() else None
     )
 
-if __name__ == '__main__':
-    token = util.getTokenFromFile('token.key')
+def buildApplication(token):
     application = ApplicationBuilder().token(token).build()
-    
-    start_handler = CommandHandler('start', start)
-    application.add_handler(start_handler)
+
+    # Group -1 runs before every other handler and stops updates from users not on the allow-list.
+    application.add_handler(TypeHandler(Update, access.gate), group=-1)
+    application.add_handler(CommandHandler('start', start))
     application.add_handler(CallbackQueryHandler(handleCallback))
     # New location messages only: a live location also sends an edited message
     # every few seconds, which would otherwise repost the board each time.
     application.add_handler(MessageHandler(filters.LOCATION & filters.UpdateType.MESSAGE, handleLocation))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handleMessage))
-    
-    application.run_polling()
+    return application
+
+if __name__ == '__main__':
+    buildApplication(util.getTokenFromFile('token.key')).run_polling()

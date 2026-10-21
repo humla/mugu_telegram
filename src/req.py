@@ -31,6 +31,9 @@ class Response:
     def parseMode(self):
         return None
 
+    def disableLinkPreview(self):
+        return False
+
 class SimpleResponse(Response):
     def __init__(self, response, reply_markup=None, parse_mode=None):
         if isinstance(response, str):
