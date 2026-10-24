@@ -51,6 +51,25 @@ def _parseService(service_el):
     location_el = _child(dest, "location")
     if location_el is not None:
         destination = _childText(location_el, "locationName", "Unknown")
+
+    # Calling points carry the scheduled/estimated arrival time at each stop,
+    # which is how we know when a filtered service reaches its destination.
+    calling_points = []
+    points_el = _child(service_el, "subsequentCallingPoints")
+    if points_el is not None:
+        for point_list in points_el:
+            if _localName(point_list.tag) != "callingPointList":
+                continue
+            for point in point_list:
+                if _localName(point.tag) != "callingPoint":
+                    continue
+                calling_points.append({
+                    "crs": _childText(point, "crs", ""),
+                    "name": _childText(point, "locationName", ""),
+                    "st": _childText(point, "st", ""),
+                    "et": _childText(point, "et", ""),
+                })
+
     return {
         "std": _childText(service_el, "std", ""),
         "etd": _childText(service_el, "etd", ""),
@@ -59,6 +78,7 @@ def _parseService(service_el):
         "delayReason": _childText(service_el, "delayReason") or None,
         "platform": _childText(service_el, "platform") or None,
         "destination": destination,
+        "callingPoints": calling_points,
     }
 
 def _parseBoardResponse(xml_content):
@@ -425,10 +445,15 @@ class RailResponse(Response):
     def destinationLabel(self):
         if not self.filterTo:
             return ""
+        name = self.destinationName()
+        return f" ➔ {html.escape(name)} ({html.escape(self.filterTo)})"
+
+    def destinationName(self):
+        if not self.filterTo:
+            return ""
         codes = loadStationCodes()
         names = [name.title() for name, code in codes.items() if code == self.filterTo]
-        name = names[0] if names else self.filterTo
-        return f" ➔ {html.escape(name)} ({html.escape(self.filterTo)})"
+        return names[0] if names else self.filterTo
 
     def toTelegramString(self):
         services = self.board.get("trainServices", [])
@@ -454,7 +479,7 @@ class RailResponse(Response):
         ref_dt = self.board.get("generatedAt")
 
         for s in services[:10]:
-            lines.append(ServiceItem(s, ref_dt=ref_dt).toFormattedString())
+            lines.append(ServiceItem(s, ref_dt=ref_dt, destination_crs=self.filterTo).toFormattedString())
 
         return lines
 
@@ -517,8 +542,44 @@ def get_relative_minute_string(target_time_str, ref_dt=None):
         return ""
 
 
+TIME_PATTERN = re.compile(r"^\d{1,2}:\d{2}$")
+
+
+def _hhmmToMinutes(time_str):
+    """'HH:MM' -> minutes since midnight, or None if not a clock time."""
+    if not time_str or not TIME_PATTERN.match(time_str):
+        return None
+    hours, minutes = map(int, time_str.split(":"))
+    return hours * 60 + minutes
+
+
+def _journeyMinutes(depart_str, arrive_str):
+    """Journey length in minutes, accounting for midnight rollover."""
+    start = _hhmmToMinutes(depart_str)
+    end = _hhmmToMinutes(arrive_str)
+    if start is None or end is None:
+        return None
+    diff = end - start
+    if diff < -12 * 60:
+        diff += 24 * 60
+    elif diff > 12 * 60:
+        diff -= 24 * 60
+    if diff <= 0:
+        return None
+    return diff
+
+
+def _formatDuration(minutes):
+    if not minutes:
+        return ""
+    hours, mins = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {mins:02d}m"
+    return f"{mins}m"
+
+
 class ServiceItem:
-    def __init__(self, service, ref_dt=None):
+    def __init__(self, service, ref_dt=None, destination_crs=""):
         self.std = service.get("std", "")
         self.etd = service.get("etd", "")
         self.isCancelled = service.get("isCancelled", False) or (self.etd.lower() == 'cancelled')
@@ -528,6 +589,22 @@ class ServiceItem:
         self.destination = service.get("destination", "Unknown")
         self.ref_dt = ref_dt
 
+        # When the board is filtered to a destination, look up that calling
+        # point so we can show when the train actually gets there.
+        self.arrival = ""
+        self.duration = ""
+        if destination_crs and not self.isCancelled:
+            for point in service.get("callingPoints", []):
+                if (point.get("crs") or "").upper() != destination_crs.upper():
+                    continue
+                if TIME_PATTERN.match(point.get("et", "")):
+                    self.arrival = point["et"]
+                elif TIME_PATTERN.match(point.get("st", "")):
+                    self.arrival = point["st"]
+                break
+            departure = self.etd if TIME_PATTERN.match(self.etd) else self.std
+            self.duration = _formatDuration(_journeyMinutes(departure, self.arrival))
+
         # Compute relative minutes for anything less than 1 hour away
         if self.isCancelled:
             self.relative_time = ""
@@ -536,10 +613,17 @@ class ServiceItem:
         else:
             self.relative_time = get_relative_minute_string(self.std, ref_dt=ref_dt)
 
+    def arrivalSuffix(self):
+        if not self.arrival:
+            return ""
+        duration = f" ({self.duration})" if self.duration else ""
+        return f" → <b>{html.escape(self.arrival)}</b>{duration}"
+
     def toFormattedString(self):
-        dest = html.escape(self.destination)
+        dest = f"to {html.escape(self.destination)}"
         plat = f" • Plat {html.escape(str(self.platform))}" if self.platform and str(self.platform) != "NA" else ""
         rel = f" {self.relative_time}" if self.relative_time else ""
+        arr = self.arrivalSuffix()
 
         if self.isCancelled:
             line = f"🔴 <b>{self.std}</b> <s>{dest}</s>{plat} • <i>Cancelled</i>"
@@ -547,12 +631,12 @@ class ServiceItem:
                 line += f"\n   ↳ <i>{html.escape(self.cancelReason)}</i>"
             return line
         elif self.etd.lower() == "on time":
-            return f"🟢 <b>{self.std}</b>{rel} {dest}{plat} • <i>On time</i>"
+            return f"🟢 <b>{self.std}</b>{rel}{arr} {dest}{plat} • <i>On time</i>"
         else:
             if self.etd.lower() == "delayed":
-                line = f"🟡 <b>Delayed</b> (was {self.std}){rel} {dest}{plat}"
+                line = f"🟡 <b>Delayed</b> (was {self.std}){rel}{arr} {dest}{plat}"
             else:
-                line = f"🟡 <b>Exp {html.escape(self.etd)}</b> (was {self.std}){rel} {dest}{plat} • <i>Delayed</i>"
+                line = f"🟡 <b>Exp {html.escape(self.etd)}</b> (was {self.std}){rel}{arr} {dest}{plat} • <i>Delayed</i>"
             if self.delayReason:
                 line += f"\n   ↳ <i>{html.escape(self.delayReason)}</i>"
             return line
