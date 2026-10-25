@@ -56,7 +56,9 @@ def buildHelpString():
     return "\n".join(responses)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    invited = context.user_data.pop("invited", False) if context.user_data is not None else False
     welcome_text = (
+        ("✅ Your invite worked — welcome aboard!\n\n" if invited else "") +
         "👋 <b>Welcome! I'm your UK travel & utility bot.</b>\n\n"
         "Here are the things I can do:\n"
         f"{html.escape(buildHelpString(), quote=False)}\n\n"
@@ -152,6 +154,14 @@ async def handleCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.debug(f"Edit message exception on {data} callback: {e}")
 
+async def handleUsersCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Slash-command form of the owner-only 'users' allow-list listing."""
+    await access.handleAccessCommand(update, context, ["users"])
+
+async def handleInviteCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner-only: show or rotate the invite link."""
+    await access.handleAccessCommand(update, context, update.message.text.lower().split())
+
 async def handleLocation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     location = update.message.location
     resp = nearbyResponse(location.latitude, location.longitude)
@@ -200,6 +210,8 @@ def buildApplication(token):
     # Group -1 runs before every other handler and stops updates from users not on the allow-list.
     application.add_handler(TypeHandler(Update, access.gate), group=-1)
     application.add_handler(CommandHandler('start', start))
+    application.add_handler(CommandHandler('users', handleUsersCommand))
+    application.add_handler(CommandHandler('invite', handleInviteCommand))
     application.add_handler(CallbackQueryHandler(handleCallback))
     # New location messages only: a live location also sends an edited message
     # every few seconds, which would otherwise repost the board each time.

@@ -1,14 +1,20 @@
 """Allow-list: only the owner and the users they approve can use the bot.
 
-res/access.json holds {"owner": "<id>", "allowed": {"<id>": "name"}, "requested": {"<id>": "name"}}.
-A stranger's first message asks the owner for approval with Allow/Ignore buttons;
-"requested" remembers who has asked so the owner is only asked once per person.
+res/access.json holds:
+  {"owner": "<id>", "allowed": {"<id>": "name"}, "requested": {"<id>": "name"},
+   "invite": "<code>"}
+
+Strangers are queued silently under "requested": no notification is sent to the
+owner, who can review the queue with /users at their leisure. The owner can also
+share an invite link (t.me/<bot>?start=<code>) that lets someone in on first
+contact without any approval step. "requested" also remembers who has already
+been turned away so they only get one reply, not one per message.
 """
 import html
 import json
 import os
+import secrets
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationHandlerStop
 
 from util import logging
@@ -27,6 +33,7 @@ def loadAccess():
     data["owner"] = str(data["owner"]) if data.get("owner") else None
     data.setdefault("allowed", {})
     data.setdefault("requested", {})
+    data["invite"] = str(data["invite"]) if data.get("invite") else None
     return data
 
 
@@ -41,6 +48,27 @@ def userLabel(user):
 
 def isOwner(user_id):
     return str(user_id) == loadAccess()["owner"]
+
+
+def newInviteCode():
+    return secrets.token_urlsafe(16)
+
+
+def inviteMatches(code, stored):
+    """Constant-time comparison; the payload can be any text a user cares to type."""
+    if not code or not stored:
+        return False
+    return secrets.compare_digest(code.encode(), stored.encode())
+
+
+def startPayload(message):
+    """The <code> in a /start <code> deep link, or None for a plain /start."""
+    if not message or not message.text:
+        return None
+    words = message.text.split(maxsplit=1)
+    if words[0].split("@")[0] != "/start" or len(words) < 2:
+        return None
+    return words[1].strip() or None
 
 
 async def gate(update, context):
@@ -60,6 +88,19 @@ async def gate(update, context):
         raise ApplicationHandlerStop  # edits, live-location updates and the like: stay quiet
     chat_id = update.effective_chat.id
 
+    code = startPayload(update.message)
+    if code is not None:
+        if inviteMatches(code, data["invite"]):
+            data["allowed"][user_id] = userLabel(user)
+            data["requested"].pop(user_id, None)
+            saveAccess(data)
+            logging.info(f"Invite accepted by {userLabel(user)} ({user_id})")
+            context.user_data["invited"] = True
+            return  # let the /start handler welcome them
+        await context.bot.send_message(chat_id=chat_id, text=(
+            "❌ That invite link isn't valid any more. Ask the owner for a fresh one."))
+        raise ApplicationHandlerStop
+
     if not data["owner"]:
         await context.bot.send_message(chat_id=chat_id, text=(
             f"This bot has no owner set up yet. Your Telegram user ID is {user_id}: put "
@@ -67,23 +108,14 @@ async def gate(update, context):
         raise ApplicationHandlerStop
 
     if user_id in data["requested"]:
-        await context.bot.send_message(chat_id=chat_id, text="🔒 This is a private bot. Your access request is still waiting for the owner.")
-        raise ApplicationHandlerStop
+        raise ApplicationHandlerStop  # already turned away once: no need to reply again
 
     data["requested"][user_id] = userLabel(user)
     saveAccess(data)
     logging.info(f"Access requested by {userLabel(user)} ({user_id})")
-    await context.bot.send_message(
-        chat_id=int(data["owner"]),
-        text=f"👋 <b>{html.escape(userLabel(user))}</b> (ID <code>{user_id}</code>) wants to use the bot.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Allow", callback_data=f"access:allow:{user_id}"),
-            InlineKeyboardButton("❌ Ignore", callback_data=f"access:ignore:{user_id}"),
-        ]]))
     await context.bot.send_message(chat_id=chat_id, text=(
-        "🔒 This is a private bot. I've asked the owner to let you in; "
-        "you'll get a message here once you're approved."))
+        "🔒 This is a private bot and access is invite-only. "
+        "If you know the owner, ask them for an invite link."))
     raise ApplicationHandlerStop
 
 
@@ -98,7 +130,7 @@ async def allowUser(context, data, user_id):
 
 
 async def handleAccessCallback(update, context):
-    """Allow/Ignore buttons on an access request. Only the owner can press them."""
+    """Allow/Ignore buttons on access requests sent before the silent queue existed."""
     query = update.callback_query
     _, action, user_id = query.data.split(":", 2)
     if not isOwner(update.effective_user.id):
@@ -109,25 +141,56 @@ async def handleAccessCallback(update, context):
         await allowUser(context, data, user_id)
         text = f"✅ Allowed <b>{html.escape(name)}</b> (ID <code>{user_id}</code>)."
     else:
-        text = (f"❌ Ignored <b>{html.escape(name)}</b> (ID <code>{user_id}</code>). They won't be asked about again; "
-                f"send <code>allow {user_id}</code> to let them in later.")
+        data["requested"].pop(user_id, None)
+        saveAccess(data)
+        text = (f"❌ Ignored <b>{html.escape(name)}</b> (ID <code>{user_id}</code>). "
+                f"Send <code>allow {user_id}</code> to let them in later.")
     await query.edit_message_text(text=text, parse_mode="HTML")
 
 
+async def inviteText(context, data, args):
+    """Build the owner's reply for 'invite', 'invite new' and 'invite off'."""
+    arg = args[0].lower() if args else ""
+    if len(args) > 1 or arg not in ("", "new", "off"):
+        return ("Usage: <code>invite</code> shows the link, <code>invite new</code> replaces it, "
+                "<code>invite off</code> stops people joining.")
+    if arg == "off":
+        data["invite"] = None
+        saveAccess(data)
+        return ("🚫 Invite links are now disabled. Anyone who already joined keeps access; "
+                "send <code>invite</code> to start a new one.")
+    if arg == "new" or not data["invite"]:
+        data["invite"] = newInviteCode()
+    saveAccess(data)
+    me = await context.bot.get_me()
+    link = f"https://t.me/{me.username}?start={data['invite']}"
+    return (f"🔗 <b>Invite link</b>\n\n<a href=\"{link}\">{html.escape(link)}</a>\n\n"
+            "Anyone who opens it gets in straight away, with no approval needed. "
+            "Send <code>invite new</code> to replace it or <code>invite off</code> to disable it.")
+
+
 async def handleAccessCommand(update, context, words):
-    """Owner commands: users, allow <id>, block <id>. Returns True when the message was one of them."""
-    if not words or words[0] not in ("users", "allow", "block") or not isOwner(update.effective_user.id):
+    """Owner commands: users, allow/block/deny <id>, invite. Returns True when handled."""
+    if not words:
+        return False
+    command = words[0].lower().lstrip("/").split("@")[0]
+    if command not in ("users", "allow", "block", "deny", "invite"):
+        return False
+    if not isOwner(update.effective_user.id):
         return False
     data = loadAccess()
-    command, args = words[0], words[1:]
+    args = words[1:]
     if command == "users":
         lines = ["👥 <b>Allowed users</b>"]
         lines += [f"• {html.escape(name)} · <code>{uid}</code>" for uid, name in data["allowed"].items()] or ["<i>Only you so far.</i>"]
         if data["requested"]:
-            lines += ["", "<b>Asked but not allowed</b>"]
+            lines += ["", f"<b>Turned away ({len(data['requested'])})</b>"]
             lines += [f"• {html.escape(name)} · <code>{uid}</code>" for uid, name in data["requested"].items()]
-        lines += ["", "<i>allow &lt;id&gt; adds someone, block &lt;id&gt; removes them.</i>"]
+        lines += ["", "<i>allow &lt;id&gt; adds someone, block &lt;id&gt; removes them, "
+                       "deny &lt;id&gt; clears a turned-away entry.</i>"]
         text = "\n".join(lines)
+    elif command == "invite":
+        text = await inviteText(context, data, args)
     elif len(args) != 1 or not args[0].isdigit():
         text = f"Usage: <code>{command} &lt;user id&gt;</code>. Send <code>users</code> to see IDs."
     elif args[0] == data["owner"]:
@@ -135,10 +198,19 @@ async def handleAccessCommand(update, context, words):
     elif command == "allow":
         name = await allowUser(context, data, args[0])
         text = f"✅ Allowed <b>{html.escape(name)}</b> (ID <code>{args[0]}</code>)."
+    elif command == "deny":
+        if args[0] in data["requested"]:
+            name = data["requested"].pop(args[0])
+            saveAccess(data)
+            text = f"❌ Cleared the turned-away entry for <b>{html.escape(name)}</b> (ID <code>{args[0]}</code>)."
+        elif args[0] in data["allowed"]:
+            text = f"<code>{args[0]}</code> is allowed; use <code>block {args[0]}</code> to remove them."
+        else:
+            text = f"There was no turned-away entry for <code>{args[0]}</code>."
     elif args[0] not in data["allowed"]:
         text = f"<code>{args[0]}</code> is not on the allow-list."
     else:
-        # Keep them under "requested" so a blocked user cannot keep re-asking.
+        # Keep them under "requested" so they only get one "it's private" reply.
         name = data["allowed"].pop(args[0])
         data["requested"][args[0]] = name
         saveAccess(data)
@@ -150,4 +222,10 @@ async def handleAccessCommand(update, context, words):
 def ownerHelp(user_id):
     if not isOwner(user_id):
         return ""
-    return "\n\nOwner only:\nusers : People allowed to use the bot and pending requests\nallow <id> : Let someone use the bot\nblock <id> : Remove someone's access"
+    return ("\n\nOwner only:\n"
+            "/users : People allowed to use the bot and who was turned away\n"
+            "allow <id> : Let someone use the bot\n"
+            "block <id> : Remove someone's access\n"
+            "deny <id> : Clear a turned-away entry\n"
+            "/invite : Shareable link that lets people in without approval\n"
+            "invite new : Replace the link · invite off : Disable it")
